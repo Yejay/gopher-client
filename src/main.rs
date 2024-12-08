@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
-use std::io::{Read, Write};
 use std::net::TcpStream;
 use url::Url;
+use std::io::{Read, Write, stdin, stdout};
 
 
 fn read_text_content(stream: &mut TcpStream) -> Result<String> {
@@ -13,29 +13,80 @@ fn read_text_content(stream: &mut TcpStream) -> Result<String> {
         Ok(String::from_utf8_lossy(err.as_bytes()).into_owned())
     })
 }
+
+fn get_initial_url() -> Result<GopherUrl> {
+    loop {
+        println!("\n=== Gopher Client ===");
+        println!("1. Connect to gopher://tramberend.de");
+        println!("2. Connect to gopher://gopher.floodgap.com");
+        println!("3. Enter custom Gopher URI");
+        println!("q. Quit");
+        print!("\nPlease choose: ");
+        stdout().flush()?;
+
+        let mut input = String::new();
+        stdin().read_line(&mut input)?;
+
+        match input.trim() {
+            "1" => return GopherUrl::parse("gopher://tramberend.de"),
+            "2" => return GopherUrl::parse("gopher://gopher.floodgap.com"),
+            "3" => {
+                print!("Enter Gopher URI: ");
+                stdout().flush()?;
+                let mut uri = String::new();
+                stdin().read_line(&mut uri)?;
+                return GopherUrl::parse(uri.trim());
+            }
+            "q" | "Q" => std::process::exit(0),
+            _ => {
+                println!("Invalid selection, please try again.");
+                continue;
+            }
+        }
+    }
+}
+
+
 fn main() -> Result<()> {
-    let mut current_url = GopherUrl::parse("gopher://gopher.floodgap.com:70")?;
+    // Initialize navigation history
+    let mut navigation_stack = Vec::new();
+    let mut current_url = get_initial_url()?;
 
     loop {
+        println!("\n=== Gopher Menu Navigation ===");
+        println!("Current server: {}", current_url.host);
+        
         // Connect and get menu content
-        let mut stream = current_url.connect()?;
+        let mut stream = match current_url.connect() {
+            Ok(stream) => stream,
+            Err(e) => {
+                println!("Connection error: {}. Press Enter to retry or 'q' to quit.", e);
+                let mut input = String::new();
+                stdin().read_line(&mut input)?;
+                if input.trim().eq_ignore_ascii_case("q") {
+                    break;
+                }
+                continue;
+            }
+        };
+
         let mut response = String::new();
-        stream.read_to_string(&mut response)?;
+        if let Err(e) = stream.read_to_string(&mut response) {
+            println!("Error reading response: {}", e);
+            continue;
+        }
 
         // Parse and display menu items
         let mut menu_items = Vec::new();
-        let mut valid_index = 0; // Track actual menu index separately
+        let mut valid_index = 0;
 
         for line in response.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
+            if line.trim().is_empty() { continue; }
 
             match MenuItem::parse(line) {
                 Ok(item) => match item.item_type {
                     GopherItem::Info => {
                         println!("{}", item.display(None));
-                        continue;
                     }
                     _ => {
                         println!("{}", item.display(Some(valid_index)));
@@ -47,22 +98,34 @@ fn main() -> Result<()> {
             }
         }
 
-        println!("\nCurrent server: {}", current_url.host);
-        println!("Enter a number to select, 'q' to quit:");
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
+        println!("\nOptions:");
+        println!("(Q)uit   - Exit the program");
+        println!("(B)ack   - Go to previous menu");
+        println!("(R)eload - Reload current menu");
+        print!("\nPlease choose (Q/B/R or 0-{}): ", menu_items.len() - 1);
+        stdout().flush()?;
 
-        match input.trim() {
-            "q" => {
-                println!("Goodbye!");
-                break;
+        let mut input = String::new();
+        stdin().read_line(&mut input)?;
+
+        match input.trim().to_lowercase().as_str() {
+            "q" => break,
+            "b" => {
+                if let Some(previous_url) = navigation_stack.pop() {
+                    current_url = previous_url;
+                } else {
+                    println!("Cannot go back - at root menu. Press Enter to continue...");
+                    stdin().read_line(&mut String::new())?;
+                }
             }
+            "r" => continue, // Will reload on next loop iteration
             selection => {
                 if let Ok(num) = selection.parse::<usize>() {
                     if num < menu_items.len() {
                         let selected = &menu_items[num];
                         match selected.item_type {
                             GopherItem::Directory => {
+                                navigation_stack.push(current_url.clone());
                                 current_url = GopherUrl {
                                     host: selected.host.clone(),
                                     port: selected.port,
@@ -75,19 +138,19 @@ fn main() -> Result<()> {
                                     "{}:{}",
                                     selected.host, selected.port
                                 ))?;
-                                stream
-                                    .write_all(format!("{}\r\n", selected.selector).as_bytes())?;
+                                stream.write_all(format!("{}\r\n", selected.selector).as_bytes())?;
                                 let content = read_text_content(&mut stream)?;
                                 println!("\n{}", content);
                                 println!("\nPress Enter to continue...");
-                                std::io::stdin().read_line(&mut String::new())?;
+                                stdin().read_line(&mut String::new())?;
                             }
                             GopherItem::Info => {
                                 println!("Info item - no action needed");
                             }
                         }
                     } else {
-                        println!("Invalid selection!");
+                        println!("Invalid selection! Press Enter to continue...");
+                        stdin().read_line(&mut String::new())?;
                     }
                 }
             }
@@ -97,14 +160,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+
+#[derive(Debug, Clone)]
 enum GopherItem {
     Text,
     Directory,
     Info,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GopherUrl {
     host: String,
     // unsigned (non-negative) 16-bit integer (0 to 65535)
@@ -112,7 +176,7 @@ struct GopherUrl {
     selector: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MenuItem {
     item_type: GopherItem,
     display_text: String,
@@ -161,15 +225,6 @@ impl GopherUrl {
 }
 
 impl MenuItem {
-    // fn display(&self, index: usize) -> String {
-    //     let type_indicator = match self.item_type {
-    //         GopherItem::Directory => "[DIR]",
-    //         GopherItem::Text => "[TXT]",
-    //         GopherItem::Info => "[INFO]",
-    //     };
-    //     format!("[{}] {} {}", index, type_indicator, self.display_text)
-    // }
-
     fn display(&self, index: Option<usize>) -> String {
         match self.item_type {
             GopherItem::Info => {
