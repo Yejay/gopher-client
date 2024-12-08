@@ -7,3 +7,11 @@ edition = "2021"
 anyhow = "1.0"
 url = "2.5"
 tokio = { version = "1.41.1", features = ["full"] }
+
+[lib]
+name = "gopher_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gopher_client"
+path = "src/main.rs"
