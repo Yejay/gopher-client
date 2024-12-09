@@ -45,6 +45,28 @@ impl GopherUrl {
         Ok(Self { host, port, selector })
     }
 
+    // pub fn parse(uri: &str) -> Result<Self> {
+    //     let parsed = Url::parse(uri)?;
+    //     if parsed.scheme() != "gopher" {
+    //         return Err(anyhow!("Not a gopher URL: {}", uri));
+    //     }
+
+    //     let host = parsed
+    //         .host_str()
+    //         .ok_or_else(|| anyhow!("No host found"))?
+    //         .to_string();
+    //     let port = parsed.port().unwrap_or(70);
+        
+    //     // Keep the entire path including the type indicator
+    //     let selector = if parsed.path() == "/" {
+    //         String::new()
+    //     } else {
+    //         parsed.path().to_string()
+    //     };
+
+    //     Ok(Self { host, port, selector })
+    // }
+
     pub fn connect(&self) -> Result<TcpStream> {
         let address = format!("{}:{}", self.host, self.port);
         let mut stream = TcpStream::connect(&address)
